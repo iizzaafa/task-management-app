@@ -84,6 +84,8 @@ task-manager/
 │   │   ├── utils/
 │   │   │   ├── auth.js
 │   │   │   └── validation.js
+                format.js
+
 │   │   └── App.jsx
 │   ├── nginx.conf
 │   └── Dockerfile
