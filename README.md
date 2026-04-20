@@ -4,6 +4,23 @@ A secure, full-stack task management application with role-based access control,
 
 ---
 
+## Quick Start (For Reviewers)
+
+```bash
+# Clone and run (takes ~1 minute)
+git clone https://github.com/iizzaafa/task-management-app.git
+cd task-management-app
+docker-compose up --build
+```
+
+Open http://localhost:3000
+
+**Admin login:** `admin@admin.com` / `Admin@123`
+
+Scroll down for detailed setup, security approach, and testing procedures.
+
+---
+
 ## Features
 
 ### Authentication & Security
@@ -46,6 +63,7 @@ A secure, full-stack task management application with role-based access control,
 - **Backend**: Flask, Flask-JWT-Extended, Flask-Bcrypt, SQLAlchemy
 - **Database**: MySQL 8.0
 - **Infrastructure**: Docker, Docker Compose, Nginx
+- **Testing**: pytest, pytest-flask
 
 ---
 
@@ -59,6 +77,11 @@ task-manager/
 │   │   ├── auth.py
 │   │   ├── models.py
 │   │   └── tasks.py
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   ├── conftest.py
+│   │   ├── test_auth.py
+│   │   └── test_tasks.py
 │   ├── config.py
 │   ├── run.py
 │   ├── requirements.txt
@@ -83,9 +106,8 @@ task-manager/
 │   │   │   └── UserManagement.jsx
 │   │   ├── utils/
 │   │   │   ├── auth.js
+│   │   │   ├── format.js
 │   │   │   └── validation.js
-                format.js
-
 │   │   └── App.jsx
 │   ├── nginx.conf
 │   └── Dockerfile
@@ -103,7 +125,7 @@ task-manager/
 
 ---
 
-## Quick Start with Docker (Recommended)
+## Setup with Docker (Recommended)
 
 ### Step 1 - Navigate to project
 
@@ -334,20 +356,18 @@ Frontend runs on http://localhost:3000
 
 ## Running Tests
 
-### Backend Tests
+### Backend Tests (Automated)
+
+The backend has **13 automated tests** covering authentication, authorization, and data isolation. Tests use an in-memory SQLite database for speed (no external services required).
 
 ```bash
+# Run inside Docker container
+docker exec -it task-backend pytest tests/ -v
+
+# Or run locally (without Docker)
 cd backend
-
-# Install test dependencies
-pip install pytest pytest-flask
-
-# Run all tests
+pip install -r requirements.txt
 pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_auth.py -v
-pytest tests/test_tasks.py -v
 ```
 
 ### Expected Test Output
@@ -356,25 +376,94 @@ pytest tests/test_tasks.py -v
 tests/test_auth.py::test_register_success PASSED
 tests/test_auth.py::test_register_duplicate_email PASSED
 tests/test_auth.py::test_register_missing_fields PASSED
+tests/test_auth.py::test_public_register_cannot_create_admin PASSED
 tests/test_auth.py::test_login_success PASSED
 tests/test_auth.py::test_login_wrong_password PASSED
-tests/test_auth.py::test_login_wrong_email PASSED
-tests/test_auth.py::test_public_register_cannot_create_admin PASSED
+tests/test_auth.py::test_admin_can_list_users PASSED
+tests/test_auth.py::test_user_cannot_list_users PASSED
 tests/test_tasks.py::test_create_task PASSED
-tests/test_tasks.py::test_get_tasks PASSED
-tests/test_tasks.py::test_update_task PASSED
-tests/test_tasks.py::test_delete_task PASSED
-tests/test_tasks.py::test_unauthorized_access PASSED
-tests/test_tasks.py::test_user_cannot_access_others_tasks PASSED
-tests/test_tasks.py::test_admin_can_access_all_tasks PASSED
+tests/test_tasks.py::test_get_tasks_requires_auth PASSED
+tests/test_tasks.py::test_user_sees_only_own_tasks PASSED
+tests/test_tasks.py::test_admin_sees_all_tasks PASSED
+tests/test_tasks.py::test_user_cannot_delete_others_task PASSED
+
+13 passed in 10.08s
 ```
 
-### Frontend Tests
+### Test Coverage
+
+| Category | Count | What It Tests |
+|----------|-------|---------------|
+| **Authentication** | 6 | Registration, login, password validation, duplicate detection |
+| **Authorization** | 2 | Admin-only endpoints reject regular users (403) |
+| **Data Isolation** | 3 | Users only see/modify their own tasks |
+| **Security** | 2 | Privilege escalation prevention, unauthorized access (401) |
+
+### Key Security Tests
+
+- **`test_public_register_cannot_create_admin`**: Verifies that even when a malicious request includes `"role": "admin"`, the backend forces the role to `"user"` — preventing privilege escalation.
+- **`test_user_sees_only_own_tasks`**: Confirms that regular users cannot see tasks belonging to other users, even if they query the endpoint directly.
+- **`test_user_cannot_delete_others_task`**: Confirms that attempting to delete another user's task returns 403 Forbidden.
+
+### Manual Testing
+
+In addition to automated tests, follow these procedures to verify full end-to-end flows:
+
+#### Admin Flow
+
+1. Login with `admin@admin.com` / `Admin@123`
+2. Sidebar displays "Admin" badge (teal) and "Users" link
+3. Click **Users** → view all users, create new users (user or admin role)
+4. Click **Tasks** → create task with "Assign to" dropdown to select owner
+5. View all tasks from all users on dashboard
+
+#### Regular User Flow
+
+1. Register via `/register` with new email
+2. Login → sidebar displays "User" badge (grey)
+3. "Users" link is NOT visible
+4. Direct URL `/admin/users` redirects to dashboard
+5. Tasks page has no "Assign to" dropdown (tasks auto-assigned to self)
+
+### Manual Security Tests
+
+**Test 1: Privilege Escalation via curl**
 
 ```bash
-cd frontend
-npm test
+curl -X POST http://localhost:5001/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"hacker@test.com","password":"Hack@1234","role":"admin"}'
 ```
+
+Expected: User created, but role in database is `"user"` (not `"admin"`).
+
+**Test 2: Unauthorized Admin Access**
+
+```bash
+# Login as regular user, copy access_token
+curl -X POST http://localhost:5001/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"regular@user.com","password":"User@1234"}'
+
+# Try admin endpoint
+curl -X GET http://localhost:5001/auth/admin/users \
+  -H "Authorization: Bearer <user_token>"
+```
+
+Expected: 403 Forbidden with `{"error": "Admin access required"}`.
+
+**Test 3: Frontend SessionStorage Tampering**
+
+1. Login as regular user
+2. Open DevTools → Application → Session Storage
+3. Change `role` value to `admin`
+4. Refresh page
+
+Expected: Sidebar UI may show "Users" link, but API calls still return 403. Backend verifies role against database, not sessionStorage.
+
+### Frontend Tests (Future Work)
+
+Frontend automated testing with Jest and React Testing Library is planned for future iteration.
 
 ---
 
@@ -399,57 +488,6 @@ npm test
 | ADMIN_PASSWORD | `Admin@123` | Default admin password (seeded on startup) |
 
 All variables are set in `docker-compose.yml` under the `backend` service's `environment` section.
-
----
-
-## Testing the Application
-
-### Manual Test Flow
-
-**Admin Flow:**
-1. Login with `admin@admin.com` / `Admin@123`
-2. Sidebar displays "Admin" badge (teal) and "Users" link
-3. Click **Users** → view all users, create new users (user or admin role)
-4. Click **Tasks** → create task with "Assign to" dropdown to select owner
-5. View all tasks from all users on dashboard
-
-**Regular User Flow:**
-1. Register via `/register` with new email
-2. Login → sidebar displays "User" badge (grey)
-3. "Users" link is NOT visible
-4. Direct URL `/admin/users` redirects to dashboard
-5. Tasks page has no "Assign to" dropdown (tasks auto-assigned to self)
-
-### Security Tests
-
-**Test 1: Privilege Escalation**
-
-```bash
-curl -X POST http://localhost:5001/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"hacker@test.com","password":"Hack@1234","role":"admin"}'
-```
-
-Expected: User created, but role in database is `"user"` (not `"admin"`).
-
-**Test 2: Unauthorized Admin Access**
-
-```bash
-# Login as regular user, copy access_token
-curl -X GET http://localhost:5001/auth/admin/users \
-  -H "Authorization: Bearer <user_token>"
-```
-
-Expected: 403 Forbidden with `{"error": "Admin access required"}`.
-
-**Test 3: Frontend SessionStorage Tampering**
-
-1. Login as regular user
-2. Open DevTools → Application → Session Storage
-3. Change `role` value to `admin`
-4. Refresh page
-
-Expected: Sidebar UI may show "Users" link, but clicking it or accessing any admin API returns 403. Backend is the source of truth.
 
 ---
 
@@ -502,6 +540,15 @@ This occurs if you have an old JWT token from a previous version. Clear your ses
 2. Clear all
 3. Login again
 
+### Tests fail with "No module named 'app'"
+
+Make sure you're running pytest from the `backend/` directory, not inside `tests/`:
+
+```bash
+cd backend
+pytest tests/ -v
+```
+
 ---
 
 ## Future Improvements
@@ -513,8 +560,9 @@ This occurs if you have an old JWT token from a previous version. Clear your ses
 - **Two-factor authentication** for admin accounts
 - **Audit logging** for admin actions (create/delete users, reassign tasks)
 - **Rate limiting** on authentication endpoints
-- **Production WSGI server** (Gunicorn) replacing Flask dev server
-- **CI/CD pipeline** with GitHub Actions for automated tests and deployment
+- **Frontend automated tests** (Jest + React Testing Library)
+- **Production WSGI server** optimizations (increase Gunicorn workers)
+- **CI/CD pipeline** with GitHub Actions for automated testing on PR
 
 ---
 
